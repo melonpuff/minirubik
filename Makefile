@@ -12,15 +12,39 @@ VECTORS := tests/solutions.txt
 INVALID_STATES := 1234567111111 123456711111111 02345671111111 82345671111111 \
 	12345671111110 12345671111114 1234567111111a 11345671111111 12345671111112
 
-.PHONY: all check prove clean indent
+.PHONY: all check check-ida prove clean indent
 
-all: solver mini
+all: solver mini tables.s ida
 
 solver: solver.c
 	$(CC) $(CFLAGS) $< -o $@
 
 mini: mini.c
 	$(CC) $(CFLAGS) $< -o $@
+
+# Host-side generator; tables.s is the .rodata that ida.c reads under Ripes.
+gen_tables: gen_tables.c
+	$(CC) $(CFLAGS) $< -o $@
+
+tables.s: gen_tables
+	./gen_tables >$@ || { rm -f $@; exit 1; }
+
+# Host build of the IDA* solver, linked against the same tables as C.
+tables.c: gen_tables
+	./gen_tables --c >$@ || { rm -f $@; exit 1; }
+
+ida: ida.c tables.c
+	$(CC) $(CFLAGS) ida.c tables.c -o $@
+
+# H1-H4 for ida.c against solver.c's BFS table; ida.c's main is renamed so
+# check.c can link against its search.
+ida_check: check.c solver.c ida.c tables.c
+	$(CC) $(CFLAGS) -Dmain=ida_main -c ida.c -o ida_check_ida.o
+	$(CC) $(CFLAGS) check.c ida_check_ida.o tables.c -o $@
+	$(RM) ida_check_ida.o
+
+check-ida: ida_check
+	./ida_check
 
 check: solver mini $(VECTORS)
 	./solver --self-test
@@ -94,4 +118,4 @@ endif
 	$(CLANG_FORMAT) -i $(C_SOURCES)
 
 clean:
-	$(RM) solver mini
+	$(RM) solver mini gen_tables tables.s tables.c ida ida_check

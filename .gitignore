@@ -3,3 +3,8 @@
 *.swp
 solver
 mini
+gen_tables
+tables.s
+tables.c
+ida
+ida_check
