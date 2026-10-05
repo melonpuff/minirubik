@@ -1,5 +1,6 @@
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 #define MAX_DEPTH 11
 
@@ -47,65 +48,58 @@ int solve_ida_star(uint16_t initial_p_rank, uint16_t initial_o_rank,
     
     // Outer loop: Gradually relax the depth bound
     for (uint8_t bound = initial_h; bound <= MAX_DEPTH; bound++) {
-        int8_t sp = 0; 
+        int8_t depth = 0; // Index of the top node; also its distance from the start
         
-        stack[sp].p_rank = initial_p_rank;
-        stack[sp].o_rank = initial_o_rank;
-        stack[sp].g = 0;
-        stack[sp].last_face = -1;
-        stack[sp].move_index = 0;
+        stack[depth].p_rank = initial_p_rank;
+        stack[depth].o_rank = initial_o_rank;
+        stack[depth].g = 0;
+        stack[depth].last_face = -1;
+        stack[depth].move_index = 0;
 
-        while (sp >= 0) {
-            uint16_t curr_p = stack[sp].p_rank;
-            uint16_t curr_o = stack[sp].o_rank;
-            uint8_t g = stack[sp].g;
-            int8_t last_face = stack[sp].last_face;
-            uint8_t move_idx = stack[sp].move_index;
-
-            uint8_t h = get_heuristic(curr_p, curr_o);
+        while (depth >= 0) {
+            uint8_t h = get_heuristic(stack[depth].p_rank, stack[depth].o_rank);
 
             // Pruning: Path cost + estimated remaining cost > bound, prune this path
-            if (g + h > bound) {
-                sp--; 
+            if (stack[depth].g + h > bound) {
+                depth--; 
                 continue;
             }
 
             if (h == 0) { // Goal found
                 // Level k left through move_index - 1, since move_index is
                 // advanced before the child is pushed
-                for (int8_t k = 0; k < sp; k++)
+                for (int8_t k = 0; k < depth; k++)
                     path[k] = stack[k].move_index - 1;
-                return sp;
+                return depth;
             }
 
-            if (move_idx < 9) { // going down 
-                stack[sp].move_index++; 
+            if (stack[depth].move_index < 9) {
+                uint8_t face = face_table[stack[depth].move_index]; // 0 or 1 or 2
+                uint8_t turns = turns_table[stack[depth].move_index]; // 1 or 2 or 3: how many turns 
                 
-                uint8_t face = face_table[move_idx];
-                uint8_t turns = turns_table[move_idx];
-                
-                if (face == last_face) continue; 
-
-                // State transition via flattened table lookup
-                uint16_t next_p = curr_p;
-                uint16_t next_o = curr_o;
-                
-                // Look up the table iteratively based on the number of quarter turns (1, 2, or 3)
+                if (face == stack[depth].last_face) {
+                    stack[depth].move_index += 3;
+                    continue;
+                }
+                stack[depth].move_index++;
+                uint16_t next_p = stack[depth].p_rank;
+                uint16_t next_o = stack[depth].o_rank;
+                // Look up tphe table iteratively based on the number of quarter turns (1, 2, or 3)
                 // Uses explicit bitwise shifts (<< 13 and << 10) instead of implicit multiplication
                 for (uint8_t i = 0; i < turns; i++) {
                     next_p = perm_transition_flat[(face << 13) + next_p];
                     next_o = ori_transition_flat[(face << 10) + next_o];
                 }
-
-                sp++; 
-                stack[sp].p_rank = next_p;
-                stack[sp].o_rank = next_o;
-                stack[sp].g = g + 1;
-                stack[sp].last_face = face;
-                stack[sp].move_index = 0; 
-            } else {
-                sp--; // All 9 moves exhausted, backtrack to previous level
+                depth++; 
+                stack[depth].p_rank = next_p;
+                stack[depth].o_rank = next_o;
+                stack[depth].g = stack[depth - 1].g + 1; // child is one move deeper
+                stack[depth].last_face = face;
+                stack[depth].move_index = 0; 
             }
+            else
+                depth--; // All 9 moves exhausted, backtrack to previous level
+
         }
     }
     return -1;
@@ -118,52 +112,67 @@ int solve_ida_star(uint16_t initial_p_rank, uint16_t initial_o_rank,
 static const char *const move_names[9] = {"R",  "R2", "R'", "B", "B2",
                                           "B'", "D",  "D2", "D'"};
 
-// Parse PPPPPPPOOOOOOO into ranks: Lehmer code of the permutation and base-3
-// value of the first six orientations, matching rank_state in solver.c
-static int parse_ranks(const char *input, uint16_t *p_rank, uint16_t *o_rank) {
-    uint8_t p[7];
+// Check PPPPPPPOOOOOOO in one pass, as ida.s does: cubie digits 1..7 with no
+// repeats, orientation digits 1..3, exactly 14 characters, and an orientation
+// sum divisible by 3. Reads input[14], so input must hold at least 15 bytes.
+// Returns 0 if the state is valid, 1 otherwise.
+static int validate(const char *input) {
     uint8_t seen = 0, sum = 0;
-    for (int i = 0; i < 14; i++) {
-        int limit = i < 7 ? 7 : 3;
-        if (input[i] < '1' || input[i] > '0' + limit)
-            return 0;
-    }
     if (input[14] != '\0')
-        return 0;
+        return 1;
     for (int i = 0; i < 7; i++) {
-        p[i] = (uint8_t) (input[i] - '1');
-        if (seen >> p[i] & 1)
-            return 0; // Duplicate cubie
-        seen |= (uint8_t) (1U << p[i]);
-        sum += (uint8_t) (input[i + 7] - '1');
+        // Unsigned subtraction folds the lower bound into the upper one
+        uint8_t p = (uint8_t) (input[i] - '1');
+        if (p >= 7)
+            return 1;
+        uint8_t mask = (uint8_t) (1U << p);
+        if (seen & mask)
+            return 1; // Duplicate cubie
+        seen |= mask;
+        uint8_t o = (uint8_t) (input[i + 7] - '1');
+        if (o >= 3)
+            return 1;
+        sum += o;
     }
-    if (sum % 3)
-        return 0; // Twist parity
+    while (sum >= 3) // sum % 3 without a remainder instruction
+        sum -= 3;
+    return sum != 0; // Twist parity
+}
 
-    // encode to rank 
-    *p_rank = 0;
-    *o_rank = 0;
-    // 1. Lehmer code encode p_rank
-    for (int i = 0; i < 7; i++) {
-        uint8_t smaller = 0;
-        for (int j = i + 1; j < 7; j++)
-            smaller += p[j] < p[i];
-        *p_rank = (uint16_t) (*p_rank * (7 - i) + smaller);
-    }
-    // 2. Base-3-interger encode o_rank
+
+static uint16_t encode(const char *input, uint16_t *o_rank) {
+    uint16_t p_rank = 0, o = 0;
     for (int i = 0; i < 6; i++)
-        *o_rank = (uint16_t) (*o_rank * 3 + (input[i + 7] - '1'));
-    return 1;
+        o = (uint16_t) ((o << 1) + o + (input[i + 7] - '1')); // o * 3 + digit
+    // i = 6 adds nothing: no cubie to its right, and the multiplier is 1
+    for (int i = 0; i < 6; i++) {
+        uint16_t smaller = 0;
+        // '1'..'7' sort like 1..7, so the characters compare directly
+        for (int j = i + 1; j < 7; j++)
+            smaller += input[j] < input[i];
+        
+        uint16_t product = 0, x = p_rank;
+        // this for loop replace product = p_rank * (7 - i) 
+        // simulates multiplication, shift and add 
+        for (uint8_t k = (uint8_t) (7 - i); k > 0; k >>= 1, x <<= 1)
+            if (k & 1)
+                product += x;
+        p_rank = (uint16_t) (product + smaller);
+    }
+    *o_rank = o;
+    return p_rank;
 }
 
 int main(int argc, char **argv) {
     uint16_t p_rank, o_rank;
     uint8_t path[MAX_DEPTH];
-    if (argc != 2 || !parse_ranks(argv[1], &p_rank, &o_rank)) {
+    // validate reads input[14]; checking the length first keeps that in bounds
+    if (argc != 2 || strlen(argv[1]) != 14 || validate(argv[1])) {
         fprintf(stderr, "usage: %s PPPPPPPOOOOOOO\n",
                 argc > 0 && argv[0] ? argv[0] : "ida");
         return 2;
     }
+    p_rank = encode(argv[1], &o_rank);
     int length = solve_ida_star(p_rank, o_rank, path);
     if (length < 0) {
         fputs("no solution within 11 moves; tables are wrong\n", stderr);
