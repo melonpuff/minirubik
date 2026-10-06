@@ -6,12 +6,14 @@ inputs:         .string "12345671111111" # test 1: solve case 15bytes
 face_table:     .byte 0, 0, 0, 1, 1, 1, 2, 2, 2
 turns_table:    .byte 1, 2, 3, 1, 2, 3, 1, 2, 3
 face_char:      .byte 82, 66, 68 #'R', 'B', 'D'
+invalid_msg:    .string "invalid input\n"
 
 path:           .zero 11 # uint8_t path[11]
                 .align 4 # align memory addr
 stack:          .zero 96 # StackNode stack[11 + 1]; 
                         # choose StackNode size as 8 bytes 
                         # instead of 7 bytes   
+
 # .equ: equate 
 .equ MAX_DEPTH,  11
 .equ NODE_SIZE,  8      
@@ -21,37 +23,35 @@ stack:          .zero 96 # StackNode stack[11 + 1];
 
 #---------------.text---------------
 .text
-main: 
-    la s0, inputs
-    li s1, NUM_INPUTS
+main:
+    la   s0, inputs            # s0: address of the current input string
+    addi s1, x0, NUM_INPUTS    # s1: inputs left
 main_loop:
-    # validate
-    mv a0, s0
-    jal ra, validate
-    li  a7, 1            # ecall 11: print char in a0
+    addi a0, s0, 0
+    jal  ra, validate          # a0 = 0 valid, 1 invalid
+    bne  a0, x0, main_invalid  # skip encode and search for an invalid input
+    addi a0, s0, 0             # validate overwrote a0; pass the string again
+    jal  ra, encode            # a0 = o_rank, a1 = p_rank
+    addi s2, a0, 0             # keep o_rank across the call
+    addi s3, a1, 0             # keep p_rank across the call
+    jal  ra, solve_ida_star    # a0 = solution length (-1 = not found)
+    jal  ra, print_path        # print path[0 .. a0-1]
+    jal  x0, main_next
+main_invalid:                  # print invalid_msg one character at a time
+    la   t0, invalid_msg       # (ecall 4 would also print the trailing '\0')
+main_invalid_loop:
+    lbu  a0, 0(t0)
+    beq  a0, x0, main_next     # stop at '\0'
+    addi a7, x0, 11            # ecall 11: print the character in a0
     ecall
-    li  a0, 10           # '\n' 
-    li  a7, 11           # ecall 11: print char in a0
+    addi t0, t0, 1
+    jal  x0, main_invalid_loop
+main_next:
+    addi s0, s0, INPUT_LEN     # next input string
+    addi s1, s1, -1
+    bne  s1, x0, main_loop
+    addi a7, x0, 10            # ecall 10: exit
     ecall
-    # encode
-    mv a0, s0 # put inputs[i] back to a0
-    jal ra, encode
-    # solve_ida_star
-    # a0 now get o_rank, a1 now get p_rank
-    addi s2, a0, 0 # save o_rank to s2 (caller save)
-    addi s3, a1, 0 # save p_rank to s3 (caller save)
-    
-    jal ra, solve_ida_star
-
-
-
-    # next iteration 
-    addi s0, s0, 15 # next input[i]
-    addi s1, s1 -1  # NUM_INPUTS --
-    bne s1, x0, main_loop
-
-
-    
 
 # validate(p[i])
 validate:
@@ -162,22 +162,136 @@ skip_add:
     jalr x0, ra, 0 # jump back to main_loop 
     
 solve_ida_star: # a0: o_rank, a1: p_rank
-    addi s4, ra, 0 # s4: store ra of solve_ida_star
+    addi sp, sp, -32
+    sw   ra, 28(sp)
+    sw   s4, 24(sp)
+    sw   s5, 20(sp)
+    sw   s6, 16(sp)
+    sw   s7, 12(sp)
+    sw   s8, 8(sp)
+    sw   s9, 4(sp)
+
+    
     addi s5, a0, 0 # s5: store o_rank
     addi s6, a1, 0 # s6: store p_rank
-    jal ra, get_heuristic
+    la   s4, stack
+    jal  ra, get_heuristic
     # a0: initial_h
-    # if a0 = 0 solved
-    beq a0, x0, main
-    addi t0, a0, 0 # t0: bound
-    addi t1, x0, 0 # t1: depth
-solve_ida_star_loop:
-    addi t2, t1, 0 # t2: address offset of stack
-    la t
+    addi s7, a0, 0 # s7: bound
+    # return if solved 
+    bne  a0, x0, solve_bound_loop
+    addi a0, x0, 0 # return 0
+    jal x0, solve_return 
     
+solve_bound_loop: # for loop
+    addi s8, x0, 0          # s8: depth  
+    sh   s6, 0(s4)          # stack[0].p_rank
+    sh   s5, 2(s4)          # stack[0].o_rank
+    sb   x0, 4(s4)          # g = 0
+    addi t0, x0, -1
+    sb   t0, 5(s4)          # last_face = -1
+    sb   x0, 6(s4)          # move_index = 0
+solve_depth_loop: # while loop
+    blt  s8, x0, solve_next_bound
+    slli s9, s8, 3 # every StackNode in stack is 8 bytes
+    add s9, s9, s4
+    lhu a1, 0(s9) # load stack[depth].p_rank
+    lhu a0, 2(s9) # load stack[depth].o_rank
+    jal ra, get_heuristic
+    lbu t1, 4(s9) # load stack[depth].g
+    add t1, t1, a0 # stack[depth].g + h
+    bge s7, t1, solve_not_pruned
+    addi s8, s8, -1 # depth --
+    jal  x0, solve_depth_loop
+solve_not_pruned: 
+    bne a0, x0, solve_not_found
+    la   t0, path                    # t0: &path[k]
+    addi t1, s4, 0                   # t1: &stack[k]
+    addi t2, x0, 0                   # t2: k
+   
+solve_path_loop:
+    bge  t2, s8, solve_path_done     # k < depth
+    lbu  t3, 6(t1)                   # t3: stack[k].move_index
+    addi t3, t3, -1                  # move_index - 1
+    sb   t3, 0(t0)                   # path[k]
+    addi t0, t0, 1                   # &path + 1 byte
+    addi t1, t1, 8                   # next node in stack
+    addi t2, t2, 1                   # k++
+    jal  x0, solve_path_loop
 
+solve_path_done:
+    addi a0, s8, 0                   # return depth
+    jal  x0, solve_return
 
-    
+solve_not_found:  
+    lbu  t0, 6(s9) # t0: stack[depth].move_index
+    addi t1, x0, NUM_MOVES
+    bge  t0, t1, solve_backtrack     # move_index >= 9: all 9 moves tried
+    la   t1, face_table
+    add  t1, t1, t0 # &face_table[stack[depth].move_index]
+    lbu  t2, 0(t1)  # t2: face: face_table[stack[depth].move_index]
+    la   t1, turns_table    
+    add  t1, t1, t0 # &turns_table[stack[depth].move_index]
+    lbu  t3, 0(t1)  # t3: turns = turns_table[stack[depth].move_index]
+    lb   t4, 5(s9) # t4: stack[depth].last_face
+    bne  t2, t4, solve_new_move
+    addi t0, t0, 3 # stack[depth].move_index += 3;
+    sb   t0, 6(s9)
+    jal  x0, solve_not_found
+
+solve_new_move:
+    addi t0, t0, 1 # stack[depth].move_index++;
+    sb   t0, 6(s9) 
+    lhu  t5, 0(s9) # t5: next_p = stack[depth].p_rank
+    lhu  t6, 2(s9) # t6: next_o = stack[depth].o_rank
+
+solve_turn_loop:
+    slli t1, t2, 13  # face << 13
+    add  t1, t1, t5  # (face << 13) + next_p
+    slli t1, t1, 1   # x 2: each entry is 2 bytes
+    la   t0, perm_transition_flat
+    add  t1, t0, t1
+    lhu  t5, 0(t1)   # next_p = perm_transition_flat[...]
+    slli t1, t2, 10  # face << 10
+    add  t1, t1, t6  # (face << 10) + next_o
+    slli t1, t1, 1
+    la   t0, ori_transition_flat
+    add  t1, t0, t1
+    lhu  t6, 0(t1)   # next_o = ori_transition_flat[...]
+    addi t3, t3, -1
+    bne  t3, x0, solve_turn_loop
+
+   #---- push the child into stack[depth + 1] = s9 + 8 ----
+   # s9 is the addr of parent node
+    addi s8, s8, 1   # depth++
+    sh   t5, 8(s9)   # child.p_rank
+    sh   t6, 10(s9)  # child.o_rank
+    lbu  t0, 4(s9)   # parent's g
+    addi t0, t0, 1  # # parent's g + 1
+    sb   t0, 12(s9)  # child.g = parent.g + 1
+    sb   t2, 13(s9)  # child.last_face = face
+    sb   x0, 14(s9)  # child.move_index = 0
+    jal x0, solve_depth_loop
+solve_backtrack:
+    addi s8, s8, -1                  # depth--
+    jal  x0, solve_depth_loop
+
+solve_next_bound: 
+    addi s7, s7, 1 # bound ++
+    addi t0, x0, MAX_DEPTH
+    bge t0, s7, solve_bound_loop
+    addi a0, x0, -1 # return -1 (no found) -> solve_return
+
+solve_return:
+    lw   ra, 28(sp)
+    lw   s4, 24(sp)
+    lw   s5, 20(sp)
+    lw   s6, 16(sp)
+    lw   s7, 12(sp)
+    lw   s8, 8(sp)
+    lw   s9, 4(sp)
+    addi sp, sp, 32
+    jalr x0, ra, 0
 
 
 get_heuristic:  # a0: o_rank, a1: p_rank
@@ -187,11 +301,56 @@ get_heuristic:  # a0: o_rank, a1: p_rank
     la t0, perm_heuristic
     add t0, t0, a1 
     lbu t2, 0(t0) # t2: perm_heuristic[p_rank]
-    begu t3, t1, t2
-    addi a0, t2, 0
-    bne t3, x0, get_heuristic_done # t1>t2 ori_h > perm_h
     addi a0, t1, 0
+    bgeu t1, t2, get_heuristic_done # t1>t2 ori_h > perm_h
+    addi a0, t2, 0
 get_heuristic_done: 
     jalr x0, ra, 0
 
-    
+
+print_path:                    # a0 = length -> prints path as "R B' D2 ...", then '\n'
+    addi t1, a0, 0             # t1: length (a0 is reused for printing)
+    addi t0, x0, 0             # t0: i
+    la   t2, path              # t2: &path[0]
+print_path_loop:
+    bge  t0, t1, print_path_done
+    beq  t0, x0, print_path_move    # no space before the first move
+    addi a0, x0, 32            # ' '
+    addi a7, x0, 11            # ecall 11: print the character in a0
+    ecall
+print_path_move:
+    add  t3, t2, t0
+    lbu  t3, 0(t3)             # t3: move = path[i] (0..8)
+    la   t4, face_table
+    add  t4, t4, t3
+    lbu  t4, 0(t4)             # t4: face (0, 1, 2)
+    la   t5, face_char
+    add  t5, t5, t4
+    lbu  a0, 0(t5)             # 'R', 'B' or 'D'
+    addi a7, x0, 11
+    ecall
+    la   t4, turns_table
+    add  t4, t4, t3
+    lbu  t4, 0(t4)             # t4: turns (1, 2, 3)
+    addi t5, x0, 2
+    beq  t4, t5, print_path_half
+    addi t5, x0, 3
+    beq  t4, t5, print_path_prime
+    jal  x0, print_path_next   # turns = 1: no suffix
+print_path_half:
+    addi a0, x0, 50            # '2'
+    addi a7, x0, 11
+    ecall
+    jal  x0, print_path_next
+print_path_prime:
+    addi a0, x0, 39            # '\''
+    addi a7, x0, 11
+    ecall
+print_path_next:
+    addi t0, t0, 1             # i++
+    jal  x0, print_path_loop
+print_path_done:
+    addi a0, x0, 10            # '\n'
+    addi a7, x0, 11
+    ecall
+    jalr x0, ra, 0
