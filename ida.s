@@ -6,6 +6,7 @@ inputs:         .string "12345671111111" # test 1: solve case 15bytes
 face_table:     .byte 0, 0, 0, 1, 1, 1, 2, 2, 2
 turns_table:    .byte 1, 2, 3, 1, 2, 3, 1, 2, 3
 face_char:      .byte 82, 66, 68 #'R', 'B', 'D'
+expected:       .byte 0, 3, 11 #(steps)
 invalid_msg:    .string "invalid input\n"
 
 path:           .zero 11 # uint8_t path[11]
@@ -20,37 +21,59 @@ stack:          .zero 96 # StackNode stack[11 + 1];
 .equ INPUT_LEN,  15     
 .equ NUM_INPUTS, 3
 .equ NUM_MOVES,  9
+.equ INVALID,    255
 
 #---------------.text---------------
 .text
 main:
     la   s0, inputs            # s0: address of the current input string
     addi s1, x0, NUM_INPUTS    # s1: inputs left
+    addi s4, x0, 0             # s4: number of failed checks (exit code)
+    la   s5, expected          # s5: &expected[i]
 main_loop:
     addi a0, s0, 0
     jal  ra, validate          # a0 = 0 valid, 1 invalid
     bne  a0, x0, main_invalid  # skip encode and search for an invalid input
     addi a0, s0, 0             # validate overwrote a0; pass the string again
     jal  ra, encode            # a0 = o_rank, a1 = p_rank
-    addi s2, a0, 0             # keep o_rank across the call
-    addi s3, a1, 0             # keep p_rank across the call
+    addi s2, a0, 0             # keep o_rank across the calls
+    addi s3, a1, 0             # keep p_rank across the calls
     jal  ra, solve_ida_star    # a0 = solution length (-1 = not found)
+    addi s6, a0, 0             # s6: keep the length across the calls
     jal  ra, print_path        # print path[0 .. a0-1]
+    # ---- T5: replaying the path from the start state must reach solved ----
+    addi a0, s2, 0             # o_rank of the input
+    addi a1, s3, 0             # p_rank of the input
+    addi a2, s6, 0             # solution length
+    jal  ra, verify_path       # a0 = 0 reaches solved, 1 does not
+    add  s4, s4, a0
+    # ---- T6: the length must equal the known optimal length ----
+    lbu  t0, 0(s5)             # t0: expected length of this input
+    beq  s6, t0, main_next
+    # T6 failed
+    addi s4, s4, 1
     jal  x0, main_next
 main_invalid:                  # print invalid_msg one character at a time
     la   t0, invalid_msg       # (ecall 4 would also print the trailing '\0')
 main_invalid_loop:
     lbu  a0, 0(t0)
-    beq  a0, x0, main_next     # stop at '\0'
+    beq  a0, x0, main_invalid_done  # stop at '\0'
     addi a7, x0, 11            # ecall 11: print the character in a0
     ecall
     addi t0, t0, 1
     jal  x0, main_invalid_loop
+main_invalid_done:
+    lbu  t0, 0(s5)             # rejecting is correct only if expected says so
+    addi t1, x0, INVALID
+    beq  t0, t1, main_next
+    addi s4, s4, 1
 main_next:
     addi s0, s0, INPUT_LEN     # next input string
+    addi s5, s5, 1             # next expected length
     addi s1, s1, -1
     bne  s1, x0, main_loop
-    addi a7, x0, 10            # ecall 10: exit
+    addi a0, s4, 0             # exit code = number of failed checks (0 = all pass)
+    addi a7, x0, 93            # ecall 93: exit with the code in a0
     ecall
 
 # validate(p[i])
@@ -58,12 +81,11 @@ validate:
     addi t0, x0, 0 # t0: i
     addi t1, x0, 0 # t1: seen
     addi t2, x0, 0 # t2: sum
-    
     #  if (input[14] != '\0')
     lbu t3, 14(a0)
     bne t3, x0, validate_bad
 
-validate_loop: 
+validate_loop:
     add t3, a0, t0 # t3: &p[i]
     lbu t4, 0(t3) # t4: p[i]
     addi t4, t4, -49 # - '1' to get value
@@ -73,7 +95,7 @@ validate_loop:
     # check 2 (front 7 char): is unique
     addi t5, x0, 1 # t5: mask
     sll t5, t5, t4 # 1 << p[i]
-    and t6, t1, t5 
+    and t6, t1, t5
     bne t6, x0, validate_bad
     or t1, t1, t5 # update seen
     # check 3 (rear 7 char): less than 3
@@ -353,4 +375,43 @@ print_path_done:
     addi a0, x0, 10            # '\n'
     addi a7, x0, 11
     ecall
+    jalr x0, ra, 0
+
+# verify for T5, follow steps again
+verify_path:                   # a0 = o_rank, a1 = p_rank, a2 = length
+                               # -> a0 = 0 if path[0 .. length-1] takes the state to solved, else 1
+    addi t0, x0, 0             # t0: i
+    la   t1, path              # t1: &path[0]
+    addi t5, a1, 0             # t5: p
+    addi t6, a0, 0             # t6: o
+verify_move_loop:
+    bge  t0, a2, verify_check
+    add  t2, t1, t0
+    lbu  t2, 0(t2)             # t2: move = path[i]
+    la   t3, face_table
+    add  t3, t3, t2
+    lbu  t3, 0(t3)             # t3: face
+    la   t4, turns_table
+    add  t4, t4, t2
+    lbu  t4, 0(t4)             # t4: turns
+verify_turn_loop:              # one quarter turn of face t3, turns times
+    slli t2, t3, 13            # face << 13
+    add  t2, t2, t5            # + p
+    slli t2, t2, 1             # x 2: each entry is 2 bytes
+    la   a3, perm_transition_flat
+    add  t2, a3, t2
+    lhu  t5, 0(t2)             # p = perm_transition_flat[...]
+    slli t2, t3, 10            # face << 10
+    add  t2, t2, t6            # + o
+    slli t2, t2, 1
+    la   a3, ori_transition_flat
+    add  t2, a3, t2
+    lhu  t6, 0(t2)             # o = ori_transition_flat[...]
+    addi t4, t4, -1
+    bne  t4, x0, verify_turn_loop
+    addi t0, t0, 1             # i++
+    jal  x0, verify_move_loop
+verify_check:
+    or   t2, t5, t6            # zero only when p == 0 and o == 0
+    sltu a0, x0, t2            # a0 = (t2 != 0): 0 = solved, 1 = not solved
     jalr x0, ra, 0
