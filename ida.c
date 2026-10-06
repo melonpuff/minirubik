@@ -81,7 +81,7 @@ int solve_ida_star(uint16_t initial_p_rank, uint16_t initial_o_rank,
                     stack[depth].move_index += 3;
                     continue;
                 }
-                stack[depth].move_index++;
+                stack[depth].move_index++; // update index first
                 uint16_t next_p = stack[depth].p_rank;
                 uint16_t next_o = stack[depth].o_rank;
                 // Look up tphe table iteratively based on the number of quarter turns (1, 2, or 3)
@@ -90,6 +90,7 @@ int solve_ida_star(uint16_t initial_p_rank, uint16_t initial_o_rank,
                     next_p = perm_transition_flat[(face << 13) + next_p];
                     next_o = ori_transition_flat[(face << 10) + next_o];
                 }
+                // push new node into stack
                 depth++; 
                 stack[depth].p_rank = next_p;
                 stack[depth].o_rank = next_o;
@@ -98,7 +99,7 @@ int solve_ida_star(uint16_t initial_p_rank, uint16_t initial_o_rank,
                 stack[depth].move_index = 0; 
             }
             else
-                depth--; // All 9 moves exhausted, backtrack to previous level
+                depth--; // All 9 moves exhausted, pop current node
 
         }
     }

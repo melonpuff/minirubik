@@ -97,37 +97,38 @@ static void ori_unrank(int rank, int o[7])
     o[6] = (3 - sum % 3) % 3;
 }
 
-/* Fewest moves from each rank back to rank 0, found by sweeping the table one
- * depth at a time: every rank at depth d marks its unvisited neighbours d + 1.
- * Quarter, half and inverse turns all count as one move. Returns 0 if some
- * rank is never reached.
+/* Fewest moves from each rank back to rank 0, by breadth-first search from
+ * rank 0: the FIFO queue hands out ranks in order of distance, so the first
+ * time a rank is reached is along a shortest path. Quarter, half and inverse
+ * turns all count as one move. Returns 0 if some rank is never reached.
  */
+//distances(perm_transition, PERM_STRIDE, PERMS, perm_heuristic)
+//distances(ori_transition, ORI_STRIDE, ORIS, ori_heuristic)
 static int distances(const int *transition, int stride, int size,
                      int *distance)
 {
-    int reached = 1, found = 1;
+    int queue[size]; /* each rank enters the queue exactly once */
+    int head = 0, tail = 0;
     for (int i = 0; i < size; i++)
         distance[i] = UNVISITED;
     distance[0] = 0;
-    for (int depth = 0; found; depth++) {
-        found = 0;
-        for (int here = 0; here < size; here++) {
-            if (distance[here] != depth)
-                continue;
-            for (int face = 0; face < 3; face++) {
-                int there = here;
-                for (int turn = 0; turn < 3; turn++) {
-                    there = transition[face * stride + there];
-                    if (distance[there] == UNVISITED) {
-                        distance[there] = depth + 1;
-                        reached++;
-                        found = 1;
-                    }
+    queue[tail] = 0;
+    tail ++;
+    // here and there are ranks
+    while (head < tail) {
+        int here = queue[head++];
+        for (int face = 0; face < 3; face++) {
+            int there = here;
+            for (int turn = 0; turn < 3; turn++) {
+                there = transition[face * stride + there];
+                if (distance[there] == UNVISITED) {
+                    distance[there] = distance[here] + 1;
+                    queue[tail++] = there;
                 }
             }
         }
     }
-    return reached == size;
+    return tail == size;
 }
 
 static void emit(const char *name, const int *table, int count, int half,
@@ -165,6 +166,8 @@ int main(int argc, char **argv)
         for (int face = 0; face < 3; face++) {
             for (int i = 0; i < 7; i++)
                 next[i] = p[source[face][i]];
+                // source[face][i] previous location
+                // p[source[face][i]] which cubie on preious location
             perm_transition[face * PERM_STRIDE + rank] = perm_rank(next);
         }
     }
@@ -173,7 +176,10 @@ int main(int argc, char **argv)
         ori_unrank(rank, o);
         for (int face = 0; face < 3; face++) {
             for (int i = 0; i < 7; i++)
-                next[i] = (o[source[face][i]] + twist[face][i]) % 3;
+                next[i] = (o[source[face][i]] + twist[face][i]) % 3; 
+                // source[face][i] previous location
+                // o[source[face][i]] orientation of preious location
+                // twist[face][i]  add orientation value
             ori_transition[face * ORI_STRIDE + rank] = ori_rank(next);
         }
     }
