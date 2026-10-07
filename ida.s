@@ -41,6 +41,11 @@ main_loop:
     jal  ra, solve_ida_star    # a0 = solution length (-1 = not found)
     addi s6, a0, 0             # s6: keep the length across the calls
     jal  ra, print_path        # print path[0 .. a0-1]
+    # ---- animate the solution on the LED matrix ----
+    # render.s in the GUI build
+    addi a0, s0, 0             # input string
+    addi a1, s6, 0             # solution length
+    jal  ra, render_solution
     # ---- T5: replaying the path from the start state must reach solved ----
     addi a0, s2, 0             # o_rank of the input
     addi a1, s3, 0             # p_rank of the input

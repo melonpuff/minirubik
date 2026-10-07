@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include "render.c"
 
 #define MAX_DEPTH 11
 
@@ -182,6 +183,9 @@ int main(int argc, char **argv) {
     for (int i = 0; i < length; i++)
         printf("%s%s", i ? " " : "", move_names[path[i]]);
     putchar('\n');
+
+    render_solution(argv[1], path, length); // input state, then one per move
+
     // stdout is fully buffered off a terminal; write errors surface here
     return fflush(stdout) != 0 || ferror(stdout);
 }

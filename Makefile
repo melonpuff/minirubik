@@ -33,12 +33,12 @@ tables.s: gen_tables
 tables.c: gen_tables
 	./gen_tables --c >$@ || { rm -f $@; exit 1; }
 
-ida: ida.c tables.c
+ida: ida.c render.c tables.c
 	$(CC) $(CFLAGS) ida.c tables.c -o $@
 
 # H1-H4 for ida.c against solver.c's BFS table; ida.c's main is renamed so
 # check.c can link against its search.
-ida_check: check.c solver.c ida.c tables.c
+ida_check: check.c solver.c ida.c render.c tables.c
 	$(CC) $(CFLAGS) -Dmain=ida_main -c ida.c -o ida_check_ida.o
 	$(CC) $(CFLAGS) check.c ida_check_ida.o tables.c -o $@
 	$(RM) ida_check_ida.o
