@@ -224,7 +224,17 @@ solve_depth_loop: # while loop
     add s9, s9, s4
     lhu a1, 0(s9) # load stack[depth].p_rank
     lhu a0, 2(s9) # load stack[depth].o_rank
-    jal ra, get_heuristic
+    # get heuristic (no function call version)
+    la   t0, ori_heuristic
+    add  t0, t0, a0
+    lbu  t1, 0(t0)          # t1: ori_heuristic[o_rank]
+    la   t0, perm_heuristic
+    add  t0, t0, a1
+    lbu  t2, 0(t0)          # t2: perm_heuristic[p_rank]
+    addi a0, t1, 0          # a0: h = max(t1, t2)
+    bgeu t1, t2, solve_h_done
+    addi a0, t2, 0
+solve_h_done:
     lbu t1, 4(s9) # load stack[depth].g
     add t1, t1, a0 # stack[depth].g + h
     bge s7, t1, solve_not_pruned
