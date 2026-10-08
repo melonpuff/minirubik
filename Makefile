@@ -12,9 +12,9 @@ VECTORS := tests/solutions.txt
 INVALID_STATES := 1234567111111 123456711111111 02345671111111 82345671111111 \
 	12345671111110 12345671111114 1234567111111a 11345671111111 12345671111112
 
-.PHONY: all check check-ida prove clean indent
+.PHONY: all ripes measure check check-ida prove clean indent
 
-all: solver mini tables.s ida
+all: solver mini ida ripes
 
 solver: solver.c
 	$(CC) $(CFLAGS) $< -o $@
@@ -22,12 +22,36 @@ solver: solver.c
 mini: mini.c
 	$(CC) $(CFLAGS) $< -o $@
 
-# Host-side generator; tables.s is the .rodata that ida.c reads under Ripes.
+# Host-side generator; assembly/tables.s is the .data that ida.s reads under
+# Ripes.
 gen_tables: gen_tables.c
 	$(CC) $(CFLAGS) $< -o $@
 
-tables.s: gen_tables
+assembly/tables.s: gen_tables
+	@mkdir -p $(@D)
 	./gen_tables >$@ || { rm -f $@; exit 1; }
+
+# Ripes loads a single file, so each build joins the solver, a renderer and the
+# tables. The two builds share ida.s and tables.s and differ only in the
+# renderer: ripes.s animates on the GUI's LED matrix, while ripes_cli.s uses
+# render_stub.s, because --mode cli has no peripherals and LED_MATRIX_0_BASE
+# is undefined there. Ripes 2.2.6 has no .if, so the switch is made here.
+assembly/ripes.s: assembly/ida.s assembly/render.s assembly/tables.s
+	cat $^ >$@ || { rm -f $@; exit 1; }
+
+assembly/ripes_cli.s: assembly/ida.s assembly/render_stub.s assembly/tables.s
+	cat $^ >$@ || { rm -f $@; exit 1; }
+
+ripes: assembly/ripes.s assembly/ripes_cli.s
+
+# Instruction count, cycles and CPI of the CLI build on both processors.
+RIPES ?= Ripes
+measure: assembly/ripes_cli.s
+	@for proc in RV32_ISS RV32_5S; do \
+		echo "== $$proc"; \
+		$(RIPES) --mode cli --src $< -t asm --proc $$proc \
+			--iret --cycles --cpi || exit 1; \
+	done
 
 # Host build of the IDA* solver, linked against the same tables as C.
 tables.c: gen_tables
@@ -118,4 +142,5 @@ endif
 	$(CLANG_FORMAT) -i $(C_SOURCES)
 
 clean:
-	$(RM) solver mini gen_tables tables.s tables.c ida ida_check
+	$(RM) solver mini gen_tables assembly/tables.s tables.c ida ida_check \
+		assembly/ripes.s assembly/ripes_cli.s
