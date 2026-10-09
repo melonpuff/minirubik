@@ -189,7 +189,7 @@ skip_add:
     jalr x0, ra, 0 # jump back to main_loop 
     
 solve_ida_star: # a0: o_rank, a1: p_rank
-    addi sp, sp, -32
+    addi sp, sp, -48
     sw   ra, 28(sp)
     sw   s4, 24(sp)
     sw   s5, 20(sp)
@@ -197,11 +197,15 @@ solve_ida_star: # a0: o_rank, a1: p_rank
     sw   s7, 12(sp)
     sw   s8, 8(sp)
     sw   s9, 4(sp)
+    sw   s10, 32(sp)
+    sw   s11, 36(sp)
 
     
     addi s5, a0, 0 # s5: store o_rank
     addi s6, a1, 0 # s6: store p_rank
     la   s4, stack
+    la  s10, ori_heuristic
+    la   s11, perm_heuristic
     jal  ra, get_heuristic
     # a0: initial_h
     addi s7, a0, 0 # s7: bound
@@ -224,16 +228,13 @@ solve_depth_loop: # while loop
     add s9, s9, s4
     lhu a1, 0(s9) # load stack[depth].p_rank
     lhu a0, 2(s9) # load stack[depth].o_rank
-    # get heuristic (no function call version)
-    la   t0, ori_heuristic
-    add  t0, t0, a0
-    lbu  t1, 0(t0)          # t1: ori_heuristic[o_rank]
-    la   t0, perm_heuristic
-    add  t0, t0, a1
+     # get heuristic (no function call version, table bases in s10, s11)
+    add  t0, s10, a0
+    lbu  a0, 0(t0)          # a0: ori_heuristic[o_rank]
+    add  t0, s11, a1
     lbu  t2, 0(t0)          # t2: perm_heuristic[p_rank]
-    addi a0, t1, 0          # a0: h = max(t1, t2)
-    bgeu t1, t2, solve_h_done
-    addi a0, t2, 0
+    bgeu a0, t2, solve_h_done
+    addi a0, t2, 0          # a0: h = max(ori_h, perm_h)
 solve_h_done:
     lbu t1, 4(s9) # load stack[depth].g
     add t1, t1, a0 # stack[depth].g + h
@@ -327,7 +328,9 @@ solve_return:
     lw   s7, 12(sp)
     lw   s8, 8(sp)
     lw   s9, 4(sp)
-    addi sp, sp, 32
+    lw   s10, 32(sp)
+    lw   s11, 36(sp)
+    addi sp, sp, 48
     jalr x0, ra, 0
 
 
