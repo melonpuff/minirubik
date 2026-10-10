@@ -4,11 +4,8 @@
 solver
 mini
 gen_tables
-tables.s
 tables.c
 ida
 ida_check
-ripes.s
 render
-ripes_cli.s
 compare/ida.elf
