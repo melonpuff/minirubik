@@ -11,3 +11,4 @@ ida_check
 ripes.s
 render
 ripes_cli.s
+compare/ida.elf
